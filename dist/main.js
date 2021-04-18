@@ -2424,7 +2424,7 @@ if (false) { var throwOnDirectAccess, ReactIs; } else {
     setLinkPreview: function (context, value) {
         const preview = context.preview;
         const protocol = this.options.linkProtocol;
-        const reservedProtocol  = /^(mailto\:|https*\:\/\/|#)/.test(value);
+        const reservedProtocol  = /^(mailto\:|tel\:|sms\:|https*\:\/\/|#)/.test(value);
         const sameProtocol = !protocol ? false : this._w.RegExp('^' + value.substr(0, protocol.length)).test(protocol);
         context.linkValue = preview.textContent = !value ? '' : (protocol && !reservedProtocol && !sameProtocol) ? protocol + value : reservedProtocol ? value : /^www\./.test(value) ? 'http://' + value : this.context.anchor.host + (/^\//.test(value) ? '' : '/') + value;
 
@@ -3003,12 +3003,12 @@ module.exports = require("react");
 
             const xmlHttp = fileBrowserPlugin._xmlHttp = this.util.getXMLHttpRequest();
             xmlHttp.onreadystatechange = fileBrowserPlugin._callBackGet.bind(this, xmlHttp);
+            xmlHttp.open('get', url, true);
             if(browserHeader !== null && typeof browserHeader === 'object' && this._w.Object.keys(browserHeader).length > 0){
                 for(let key in browserHeader){
                     xmlHttp.setRequestHeader(key, browserHeader[key]);
                 }
             }
-            xmlHttp.open('get', url, true);
             xmlHttp.send(null);
 
             this.plugins.fileBrowser.showBrowserLoading();
@@ -3462,7 +3462,7 @@ __webpack_require__.r(__webpack_exports__);
         return {
             className: 'katex',
             method: function (element) {
-                if (!element.getAttribute('data-exp')) return;
+                if (!element.getAttribute('data-exp') || !this.options.katex) return;
                 const dom = this._d.createRange().createContextualFragment(this.plugins.math._renderer.call(this, this.util.HTMLDecoder(element.getAttribute('data-exp'))));
                 element.innerHTML = dom.querySelector('.katex').innerHTML;
             }
@@ -7643,10 +7643,21 @@ __webpack_require__.r(__webpack_exports__);
      */
     checkFileInfo: function () {
         const imagePlugin = this.plugins.image;
+        const contextImage = this.context.image;
 
         const modifyHandler = function (tag) {
             imagePlugin.onModifyMode.call(this, tag, null);
             imagePlugin.openModify.call(this, true);
+            // get size
+            contextImage.inputX.value = contextImage._origin_w;
+            contextImage.inputY.value = contextImage._origin_h;
+            // get align
+            const format = this.util.getFormatElement(tag);
+            if (format) contextImage._align = format.style.textAlign || format.style.float;
+            // link
+            const link = this.util.getParentElement(tag, this.util.isAnchor);
+            if (link && !contextImage.anchorCtx.linkValue) contextImage.anchorCtx.linkValue = ' ';
+            
             imagePlugin.update_image.call(this, true, false, true);
         }.bind(this);
 
@@ -7773,12 +7784,13 @@ __webpack_require__.r(__webpack_exports__);
             cover.insertBefore(this.plugins.image.onRender_link.call(this, imageEl, contextImage._linkElement), contextImage._caption);
         } else if (contextImage._linkElement !== null) {
             const imageElement = imageEl;
-
             imageElement.setAttribute('data-image-link', '');
-            const newEl = imageElement.cloneNode(true);
-            cover.removeChild(contextImage._linkElement);
-            cover.insertBefore(newEl, contextImage._caption);
-            imageEl = newEl;
+            if (cover.contains(contextImage._linkElement)) {
+                const newEl = imageElement.cloneNode(true);
+                cover.removeChild(contextImage._linkElement);
+                cover.insertBefore(newEl, contextImage._caption);
+                imageEl = newEl;
+            }
         }
 
         if (isNewContainer) {
@@ -7786,9 +7798,12 @@ __webpack_require__.r(__webpack_exports__);
                 contextImage._element : 
                 /^A$/i.test(contextImage._element.parentNode.nodeName) ? contextImage._element.parentNode : this.util.getFormatElement(contextImage._element) || contextImage._element;
                 
-            if (this.util.isFormatElement(existElement) && existElement.textContent.length > 0) {
-                existElement.parentNode.insertBefore(container, existElement.nextElementSibling);
+            if (this.util.isFormatElement(existElement) && existElement.childNodes.length > 0) {
+                existElement.parentNode.insertBefore(container, existElement);
                 this.util.removeItem(contextImage._element);
+                // clean format tag
+                this.util.removeEmptyNode(existElement, null);
+                if (existElement.children.length === 0) existElement.innerHTML = this.util.htmlRemoveWhiteSpace(existElement.innerHTML);
             } else {
                 if (this.util.isFormatElement(existElement.parentNode)) {
                     const formats = existElement.parentNode;
@@ -7818,7 +7833,6 @@ __webpack_require__.r(__webpack_exports__);
         }
 
         // size
-        let isPercent = false;
         if (contextImage._resizing) {
             imageEl.setAttribute('data-proportion', contextImage._proportionChecked);
             if (changeSize) {
@@ -7827,9 +7841,7 @@ __webpack_require__.r(__webpack_exports__);
         }
 
         // align
-        if (!(isPercent && contextImage._align === 'center')) {
-            this.plugins.image.setAlign.call(this, null, imageEl, null, null);
-        }
+        this.plugins.image.setAlign.call(this, null, imageEl, null, null);
 
         // set imagesInfo
         if (init) {
@@ -7874,14 +7886,18 @@ __webpack_require__.r(__webpack_exports__);
         }
 
         let userSize = contextImage._element.getAttribute('data-size') || contextImage._element.getAttribute('data-origin');
+        let w, h;
         if (userSize) {
             userSize = userSize.split(',');
-            contextImage._origin_w = userSize[0];
-            contextImage._origin_h = userSize[1];
+            w = userSize[0];
+            h = userSize[1];
         } else if (size) {
-            contextImage._origin_w = size.w;
-            contextImage._origin_h = size.h;
+            w = size.w;
+            h = size.h;
         }
+
+        contextImage._origin_w = w || element.style.width || element.width || '';
+        contextImage._origin_h = h || element.style.height || element.height || '';
     },
 
     /**
@@ -9009,30 +9025,44 @@ __webpack_require__.r(__webpack_exports__);
                 return this.isWysiwygDiv(current.parentNode);
             }.bind(this.util));
 
+        const prevFrame = oFrame;
         contextVideo._element = oFrame = oFrame.cloneNode(true);
         const cover = contextVideo._cover = this.plugins.component.set_cover.call(this, oFrame);
         const container = contextVideo._container = this.plugins.component.set_container.call(this, cover, 'se-video-container');
 
-        const figcaption = existElement.querySelector('figcaption');
-        let caption = null;
-        if (!!figcaption) {
-            caption = this.util.createElement('DIV');
-            caption.innerHTML = figcaption.innerHTML;
-            this.util.removeItem(figcaption);
+        try {
+            const figcaption = existElement.querySelector('figcaption');
+            let caption = null;
+            if (!!figcaption) {
+                caption = this.util.createElement('DIV');
+                caption.innerHTML = figcaption.innerHTML;
+                this.util.removeItem(figcaption);
+            }
+
+            // size
+            const size = (oFrame.getAttribute('data-size') || oFrame.getAttribute('data-origin') || '').split(',');
+            this.plugins.video.applySize.call(this, (size[0] || prevFrame.style.width || prevFrame.width || ''), (size[1] || prevFrame.style.height || prevFrame.height || ''));
+
+            // align
+            const format = this.util.getFormatElement(prevFrame);
+            if (format) contextVideo._align = format.style.textAlign || format.style.float;
+            this.plugins.video.setAlign.call(this, null, oFrame, cover, container);
+
+            if (this.util.isFormatElement(existElement) && existElement.childNodes.length > 0) {
+                existElement.parentNode.insertBefore(container, existElement);
+                this.util.removeItem(prevFrame);
+                // clean format tag
+                this.util.removeEmptyNode(existElement, null);
+                if (existElement.children.length === 0) existElement.innerHTML = this.util.htmlRemoveWhiteSpace(existElement.innerHTML);
+            } else {
+                existElement.parentNode.replaceChild(container, existElement);
+            }
+
+            if (!!caption) existElement.parentNode.insertBefore(caption, container.nextElementSibling);
+        } catch (error) {
+            console.warn('[SUNEDITOR.video.error] Maybe the video tag is nested.', error);
         }
 
-        const size = (oFrame.getAttribute('data-size') || oFrame.getAttribute('data-origin') || '').split(',');
-        this.plugins.video.applySize.call(this, size[0], size[1]);
-
-        if (this.util.isFormatElement(existElement) && existElement.textContent.length > 0) {
-            existElement.parentNode.insertBefore(container, existElement.nextElementSibling);
-            this.util.removeItem(contextVideo._element);
-            contextVideo._element = oFrame;
-        } else {
-            existElement.parentNode.replaceChild(container, existElement);
-        }
-
-        if (!!caption) existElement.parentNode.insertBefore(caption, container.nextElementSibling);
         this.plugins.fileManager.setInfo.call(this, 'video', oFrame, this.functions.onVideoUpload, null, true);
     },
 
@@ -9055,14 +9085,18 @@ __webpack_require__.r(__webpack_exports__);
         }
 
         let origin = contextVideo._element.getAttribute('data-size') || contextVideo._element.getAttribute('data-origin');
+        let w, h;
         if (origin) {
             origin = origin.split(',');
-            contextVideo._origin_w = origin[0];
-            contextVideo._origin_h = origin[1];
+            w = origin[0];
+            h = origin[1];
         } else if (size) {
-            contextVideo._origin_w = size.w;
-            contextVideo._origin_h = size.h;
+            w = size.w;
+            h = size.h;
         }
+
+        contextVideo._origin_w = w || element.style.width || element.width || '';
+        contextVideo._origin_h = h || element.style.height || element.height || '';
     },
 
     /**
@@ -9790,11 +9824,25 @@ __webpack_require__.r(__webpack_exports__);
             }.bind(this.util));
 
         // clone element
+        const prevElement = element;
         contextAudio._element = element = element.cloneNode(false);
         const cover = this.plugins.component.set_cover.call(this, element);
         const container = this.plugins.component.set_container.call(this, cover, 'se-audio-container');
 
-        existElement.parentNode.replaceChild(container, existElement);
+        try {
+            if (this.util.isFormatElement(existElement) && existElement.childNodes.length > 0) {
+                existElement.parentNode.insertBefore(container, existElement);
+                this.util.removeItem(prevElement);
+                // clean format tag
+                this.util.removeEmptyNode(existElement, null);
+                if (existElement.children.length === 0) existElement.innerHTML = this.util.htmlRemoveWhiteSpace(existElement.innerHTML);
+            } else {
+                existElement.parentNode.replaceChild(container, existElement);
+            }
+        } catch (error) {
+            console.warn('[SUNEDITOR.audio.error] Maybe the audio tag is nested.', error);
+        }
+
         this.plugins.fileManager.setInfo.call(this, 'audio', element, this.functions.onAudioUpload, null, false);
     },
 
@@ -13063,9 +13111,9 @@ var basic = [["font", "fontSize"], ["fontColor"], ["horizontalRule"], ["link", "
 var complex = [["undo", "redo"], ["font", "fontSize", "formatBlock"], ["bold", "underline", "italic", "strike", "subscript", "superscript"], ["removeFormat"], "/", ["fontColor", "hiliteColor"], ["outdent", "indent"], ["align", "horizontalRule", "list", "table"], ["link", "image", "video"], ["fullScreen", "showBlocks", "codeView"], ["preview", "print"], ["save", "template"]];
 var formatting = [["undo", "redo"], ["bold", "underline", "italic", "strike", "subscript", "superscript"], ["removeFormat"], ["outdent", "indent"], ["fullScreen", "showBlocks", "codeView"], ["preview", "print"]];
 /* harmony default export */ var misc_buttonList = ({
-  basic,
-  complex,
-  formatting
+  basic: basic,
+  complex: complex,
+  formatting: formatting
 });
 // EXTERNAL MODULE: external "react"
 var external_react_ = __webpack_require__(8);
@@ -13887,6 +13935,15 @@ const util_util = {
         }
 
         return (compStyle === style_b.length && compStyle === style_a.length) && (compClass === class_b.length && compClass === class_a.length);
+    },
+
+    /**
+     * @description Check the line element(util.isFormatElement) is empty.
+     * @param {Element} element Format element node
+     * @returns {Boolean}
+     */
+    isEmptyLine: function (element) {
+        return !element || !element.parentNode || (!element.querySelector('IMG, IFRAME, AUDIO, VIDEO, CANVAS, TABLE') && this.onlyZeroWidthSpace(element.textContent));
     },
 
     /**
@@ -14960,7 +15017,7 @@ const util_util = {
         for (let i = 0, len = styleArr.length, s; i < len; i++) {
             s = styleArr[i].trim();
             if (!s) continue;
-            if (/^(min-|max-)?width\s*:/.test(s)) {
+            if (/^(min-|max-)?width\s*:/.test(s) || /^(z-index|position)\s*:/.test(s)) {
                 top += s + ';';
                 continue;
             }
@@ -15441,6 +15498,7 @@ const util_util = {
         options.fullPage = !!options.fullPage;
         options.iframeCSSFileName = options.iframe ? typeof options.iframeCSSFileName === 'string' ? [options.iframeCSSFileName] : (options.iframeCSSFileName || ['suneditor']) : null;
         options.previewTemplate = typeof options.previewTemplate === 'string' ? options.previewTemplate : null;
+        options.printTemplate = typeof options.printTemplate === 'string' ? options.printTemplate : null;
         /** CodeMirror object */
         options.codeMirror = options.codeMirror ? options.codeMirror.src ? options.codeMirror : {src: options.codeMirror} : null;
         /** katex object (Math plugin) */
@@ -17825,8 +17883,8 @@ const _Context = function (element, cons, options) {
             const startOff = range.startOffset;
             const endOff = range.endOffset;
             const formatRange = range.startContainer === commonCon && util.isFormatElement(commonCon);
-            const startCon = formatRange ? commonCon.childNodes[startOff] : range.startContainer;
-            const endCon = formatRange ? commonCon.childNodes[endOff] : range.endContainer;
+            const startCon = formatRange ? (commonCon.childNodes[startOff] || commonCon.childNodes[0]) : range.startContainer;
+            const endCon = formatRange ? (commonCon.childNodes[endOff] || commonCon.childNodes[commonCon.childNodes.length - 1]) : range.endContainer;
             let parentNode, originAfter = null;
 
             if (!afterNode) {
@@ -17959,7 +18017,7 @@ const _Context = function (element, cons, options) {
             } finally {
                 if ((util.isFormatElement(oNode) || util.isComponent(oNode)) && startCon === endCon) {
                     const cItem = util.getFormatElement(commonCon, null);
-                    if (cItem && cItem.nodeType === 1 && util.onlyZeroWidthSpace(cItem.textContent)) {
+                    if (cItem && cItem.nodeType === 1 && util.isEmptyLine(cItem)) {
                         util.removeItem(cItem);
                     }
                 }
@@ -20682,8 +20740,8 @@ const _Context = function (element, cons, options) {
             iframe.style.display = 'none';
             _d.body.appendChild(iframe);
 
+            const contentsHTML = options.printTemplate ? options.printTemplate.replace(/\{\{\s*contents\s*\}\}/i, this.getContents(true)) : this.getContents(true);
             const printDocument = util.getIframeDocument(iframe);
-            const contentsHTML = this.getContents(true);
             const wDoc = this._wd;
 
             if (options.iframe) {
@@ -20868,12 +20926,12 @@ const _Context = function (element, cons, options) {
             }
             // text
             if (node.nodeType === 3) {
-                if (!requireFormat) return node.textContent;
+                if (!requireFormat) return util._HTMLConvertor(node.textContent);
                 const textArray = node.textContent.split(/\n/g);
                 let html = '';
                 for (let i = 0, tLen = textArray.length, text; i < tLen; i++) {
                     text = textArray[i].trim();
-                    if (text.length > 0) html += '<' + defaultTag + '>' + text + '</' + defaultTag + '>';
+                    if (text.length > 0) html += '<' + defaultTag + '>' + util._HTMLConvertor(text) + '</' + defaultTag + '>';
                 }
                 return html;
             }
@@ -20926,7 +20984,7 @@ const _Context = function (element, cons, options) {
             if (/^<[a-z0-9]+\:[a-z0-9]+/i.test(m)) return m;
 
             let v = null;
-            const tAttr = this._attributesTagsWhitelist[t.match(/(?!<)[a-zA-Z0-9]+/)[0].toLowerCase()];
+            const tAttr = this._attributesTagsWhitelist[t.match(/(?!<)[a-zA-Z0-9\-]+/)[0].toLowerCase()];
             if (tAttr) v = m.match(tAttr);
             else v = m.match(this._attributesWhitelistRegExp);
 
@@ -20964,7 +21022,7 @@ const _Context = function (element, cons, options) {
          * @returns {String}
          */
         cleanHTML: function (html, whitelist) {
-            html = this._deleteDisallowedTags(html).replace(/(<[a-zA-Z0-9]+)[^>]*(?=>)/g, this._cleanTags.bind(this, false));
+            html = this._deleteDisallowedTags(html).replace(/(<[a-zA-Z0-9\-]+)[^>]*(?=>)/g, this._cleanTags.bind(this, false));
 
             const dom = _d.createRange().createContextualFragment(html);
             try {
@@ -21013,7 +21071,7 @@ const _Context = function (element, cons, options) {
          * @returns {String}
          */
         convertContentsForEditor: function (contents) {
-            contents = this._deleteDisallowedTags(contents).replace(/(<[a-zA-Z0-9]+)[^>]*(?=>)/g, this._cleanTags.bind(this, true));
+            contents = this._deleteDisallowedTags(contents).replace(/(<[a-zA-Z0-9\-]+)[^>]*(?=>)/g, this._cleanTags.bind(this, true));
 
             const dom = _d.createRange().createContextualFragment(this._deleteDisallowedTags(contents));
 
@@ -21451,8 +21509,8 @@ const _Context = function (element, cons, options) {
          * @private
          */
         _onChange_historyStack: function () {
-            event._applyTagEffects();
-            core._variable.isChanged = true;
+            if (this.hasFocus) event._applyTagEffects();
+            this._variable.isChanged = true;
             if (context.tool.save) context.tool.save.removeAttribute('disabled');
             if (functions.onChange) functions.onChange(this.getContents(true), this);
             if (context.element.toolbar.style.display === 'block') event._showToolbarBalloon();
@@ -22649,9 +22707,9 @@ const _Context = function (element, cons, options) {
                         }
                     }
 
-                    if (!shift && /^H[1-6]$/i.test(formatEl.nodeName) && core.isEdgeFormat(range.endContainer, range.endOffset, 'end')) {
+                    if (!shift && core.isEdgeFormat(range.endContainer, range.endOffset, 'end')) {
                         e.preventDefault();
-                        const newFormat = core.appendFormatTag(formatEl, options.defaultTag);
+                        const newFormat = core.appendFormatTag(formatEl, /^H[1-6]$/i.test(formatEl.nodeName) ? options.defaultTag : formatEl.cloneNode(true));
                         core.setRange(newFormat, 1, newFormat, 1);
                         break;
                     }
@@ -23214,7 +23272,7 @@ const _Context = function (element, cons, options) {
                 return true;
             } else {
                 plainText = data.getData('text/plain');
-                cleanData = data.getData('text/html') || plainText;
+                cleanData = data.getData('text/html');
                 if (event._setClipboardData(type, e, plainText, cleanData, data) === false) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -23226,16 +23284,21 @@ const _Context = function (element, cons, options) {
         _setClipboardData: function (type, e, plainText, cleanData, data) {
             // MS word, OneNode, Excel
             const MSData = /class=["']*Mso(Normal|List)/i.test(cleanData) || /content=["']*Word.Document/i.test(cleanData) || /content=["']*OneNote.File/i.test(cleanData) || /content=["']*Excel.Sheet/i.test(cleanData);
-            if (MSData) {
-                cleanData = cleanData.replace(/\n/g, ' ');
-                plainText = plainText.replace(/\n/g, ' ');
-            } else if (plainText === cleanData) {
-                cleanData = plainText.replace(/\n/g, '<br>');
+            const onlyText = !cleanData;
+
+            if (!onlyText) {
+                if (MSData) {
+                    cleanData = cleanData.replace(/\n/g, ' ');
+                    plainText = plainText.replace(/\n/g, ' ');
+                } else if (plainText === cleanData) {
+                    cleanData = plainText.replace(/\n/g, '<br>');
+                }
+                cleanData = core.cleanHTML(cleanData, core.pasteTagsWhitelistRegExp);
+            } else {
+                cleanData = plainText;
             }
 
-            cleanData = core.cleanHTML(cleanData, core.pasteTagsWhitelistRegExp);
             const maxCharCount = core._charCount(core._charTypeHTML ? cleanData : plainText);
-
             // paste event
             if (type === 'paste' && typeof functions.onPaste === 'function') {
                 const value = functions.onPaste(e, cleanData, maxCharCount, core);
@@ -23248,6 +23311,8 @@ const _Context = function (element, cons, options) {
                 if (!value) return false;
                 if (typeof value === 'string') cleanData = value;
             }
+
+            if (onlyText) cleanData = util._HTMLConvertor(cleanData);
 
             // files
             const files = data.files;
@@ -23992,6 +24057,7 @@ const _Context = function (element, cons, options) {
                     if (rangeSelection) core.setRange(firstCon.container || firstCon, firstCon.startOffset || 0, a, offset);
                     else core.setRange(a, offset, a, offset);
                 } catch (error) {
+                    console.warn('[SUNEDITOR.insertHTML.fail] ' + error);
                     core.execCommand('insertHTML', false, html);
                 }
             } else {
@@ -24347,8 +24413,10 @@ var isArray = function isArray(obj) {
 
 /* harmony default export */ var misc_getPlugins = (getPlugins);
 // CONCATENATED MODULE: ./misc/getLanguage.js
+function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "function" && typeof Symbol.iterator === "symbol") { _typeof = function _typeof(obj) { return typeof obj; }; } else { _typeof = function _typeof(obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; }; } return _typeof(obj); }
+
 var getLanguage = function getLanguage(lang) {
-  switch (typeof lang) {
+  switch (_typeof(lang)) {
     case 'object':
       return lang;
 
@@ -24426,6 +24494,8 @@ var prop_types = __webpack_require__(0);
 var prop_types_default = /*#__PURE__*/__webpack_require__.n(prop_types);
 
 // CONCATENATED MODULE: ./SunEditor.js
+function SunEditor_typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "function" && typeof Symbol.iterator === "symbol") { SunEditor_typeof = function _typeof(obj) { return typeof obj; }; } else { SunEditor_typeof = function _typeof(obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; }; } return SunEditor_typeof(obj); }
+
 function _extends() { _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; }; return _extends.apply(this, arguments); }
 
 function ownKeys(object, enumerableOnly) { var keys = Object.keys(object); if (Object.getOwnPropertySymbols) { var symbols = Object.getOwnPropertySymbols(object); if (enumerableOnly) symbols = symbols.filter(function (sym) { return Object.getOwnPropertyDescriptor(object, sym).enumerable; }); keys.push.apply(keys, symbols); } return keys; }
@@ -24446,11 +24516,11 @@ function _setPrototypeOf(o, p) { _setPrototypeOf = Object.setPrototypeOf || func
 
 function _createSuper(Derived) { var hasNativeReflectConstruct = _isNativeReflectConstruct(); return function _createSuperInternal() { var Super = _getPrototypeOf(Derived), result; if (hasNativeReflectConstruct) { var NewTarget = _getPrototypeOf(this).constructor; result = Reflect.construct(Super, arguments, NewTarget); } else { result = Super.apply(this, arguments); } return _possibleConstructorReturn(this, result); }; }
 
-function _possibleConstructorReturn(self, call) { if (call && (typeof call === "object" || typeof call === "function")) { return call; } return _assertThisInitialized(self); }
+function _possibleConstructorReturn(self, call) { if (call && (SunEditor_typeof(call) === "object" || typeof call === "function")) { return call; } return _assertThisInitialized(self); }
 
 function _assertThisInitialized(self) { if (self === void 0) { throw new ReferenceError("this hasn't been initialised - super() hasn't been called"); } return self; }
 
-function _isNativeReflectConstruct() { if (typeof Reflect === "undefined" || !Reflect.construct) return false; if (Reflect.construct.sham) return false; if (typeof Proxy === "function") return true; try { Date.prototype.toString.call(Reflect.construct(Date, [], function () {})); return true; } catch (e) { return false; } }
+function _isNativeReflectConstruct() { if (typeof Reflect === "undefined" || !Reflect.construct) return false; if (Reflect.construct.sham) return false; if (typeof Proxy === "function") return true; try { Boolean.prototype.valueOf.call(Reflect.construct(Boolean, [], function () {})); return true; } catch (e) { return false; } }
 
 function _getPrototypeOf(o) { _getPrototypeOf = Object.setPrototypeOf ? Object.getPrototypeOf : function _getPrototypeOf(o) { return o.__proto__ || Object.getPrototypeOf(o); }; return _getPrototypeOf(o); }
 
@@ -24767,7 +24837,7 @@ SunEditor_SunEditor.propTypes = {
   setOptions: prop_types_default.a.object,
   name: prop_types_default.a.string,
   setContents: prop_types_default.a.string,
-  name: prop_types_default.a.string,
+  ["name"]: prop_types_default.a.string,
   appendContents: prop_types_default.a.string,
   setDefaultStyle: prop_types_default.a.string,
   enable: prop_types_default.a.bool,
